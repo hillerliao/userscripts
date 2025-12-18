@@ -1,64 +1,36 @@
 // ==UserScript==
-// @name         Open All Links in Current Tab
+// @name         Force Open in Same Tab
 // @namespace    http://tampermonkey.net/
-// @version      0.1
-// @description  Forces all links to open in the current tab, overriding target="_blank" and base tag
+// @version      1.0
 // @match        *://*/*
 // @grant        none
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
-    // 覆盖默认的链接点击行为
-    function overrideLinkBehavior(e) {
-        const link = e.target.closest('a');
-        if (link && link.href) {
-            if (!e.ctrlKey) {  // 检查是否按下了Ctrl键
-                e.preventDefault();
-                window.location.href = link.href;
-            }
+    // 1. 拦截 window.open
+    const originalOpen = window.open;
+    window.open = function (url) {
+        if (url) {
+            window.location.href = url;
         }
-    }
+        return null;
+    };
 
-    // 移除所有链接的target属性
-    function removeTargetAttributes() {
-        const links = document.getElementsByTagName('a');
-        for (let link of links) {
-            link.removeAttribute('target');
-        }
-    }
-
-    // 移除base标签的target属性
-    function removeBaseTargetAttribute() {
-        const baseTag = document.getElementsByTagName('base')[0];
-        if (baseTag) {
-            baseTag.removeAttribute('target');
-        }
-    }
-
-    // 初始化函数
-    function init() {
-        document.addEventListener('click', overrideLinkBehavior, true);
-        removeTargetAttributes();
-        removeBaseTargetAttribute();
-
-        // 使用MutationObserver来处理动态添加的链接
-        const observer = new MutationObserver((mutations) => {
-            for (let mutation of mutations) {
-                if (mutation.type === 'childList') {
-                    removeTargetAttributes();
-                }
-            }
+    // 2. 移除所有 target="_blank"
+    function removeTargets() {
+        document.querySelectorAll('a[target]').forEach(a => {
+            a.removeAttribute('target');
         });
-
-        observer.observe(document.body, { childList: true, subtree: true });
+        document.querySelectorAll('base[target]').forEach(b => {
+            b.removeAttribute('target');
+        });
     }
 
-    // 在页面加载完成后运行初始化函数
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
+    // 3. 监听动态 DOM
+    new MutationObserver(removeTargets)
+        .observe(document.documentElement, { childList: true, subtree: true });
+
+    removeTargets();
 })();
