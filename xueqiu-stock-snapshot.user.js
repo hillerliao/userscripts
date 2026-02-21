@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         雪球快照 (全场景适配-33.0)
+// @name         雪球快照 (详情页精准适配-42.0)
 // @namespace    http://tampermonkey.net/
-// @version      33.0
-// @description  解决 370742852 等专栏页面不注入问题，强化时间提取和容器定位
+// @version      42.0
+// @description  基于34.0优化：取消无效的列表识别，严格锁定详情页注入逻辑
 // @author       Gemini
 // @match        *://xueqiu.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,27 +18,34 @@
         return price < 1 ? price.toFixed(3) : price.toFixed(2);
     }
 
-    // 针对专栏页面的超级时间提取器
+    // 获取当前页面的帖子发布时间（详情页模式）
     function getPostTimestamp() {
-        // 1. 尝试从专栏特有的时间类名中提取
+        // 1. 尝试从雪球内置的数据层提取（最精准，不受 DOM 变动影响）
+        try {
+            const nextData = JSON.parse(document.getElementById('__NEXT_DATA__').textContent);
+            const p = nextData.props.pageProps;
+            const t = p.status?.created_at || p.detail?.created_at || p.article?.created_at || p.status?.time;
+            if (t) return t;
+        } catch(e) {}
+
+        // 2. 尝试从 DOM 时间元素提取
         const timeEl = document.querySelector('.article__bd__from, .status-item__date, .time');
         if (timeEl) {
             const tText = timeEl.innerText.match(/\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}/);
             if (tText) return new Date(tText[0].replace(/-/g, '/')).getTime();
         }
 
-        // 2. 尝试正则匹配全文
+        // 3. 正则全文匹配
         const bodyText = document.body.innerText;
         const timeMatch = bodyText.match(/(发布于\s*)?(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2})/);
         if (timeMatch) return new Date(timeMatch[2].replace(/-/g, '/')).getTime();
 
-        // 3. 兜底从数据层提取
-        try {
-            const nextData = JSON.parse(document.getElementById('__NEXT_DATA__').textContent);
-            const p = nextData.props.pageProps;
-            return p.status?.created_at || p.detail?.created_at || p.article?.created_at || p.status?.time;
-        } catch(e) {}
         return null;
+    }
+
+    // 判定是否为“详情页”（URL包含两层数字路径，如 /1665500619/376525298）
+    function isDetailPage() {
+        return /^\/\d+\/\d+/.test(window.location.pathname);
     }
 
     function showTooltip(linkEl, data) {
@@ -63,9 +70,7 @@
             </div>`;
 
         const rect = linkEl.getBoundingClientRect();
-        let left = rect.left;
-        if (left + 200 > window.innerWidth) left = window.innerWidth - 210;
-        tooltip.style.left = `${left}px`;
+        tooltip.style.left = `${Math.min(rect.left, window.innerWidth - 210)}px`;
         tooltip.style.top = `${rect.bottom + 8}px`;
         tooltip.style.opacity = '1';
     }
@@ -74,11 +79,11 @@
         const timestamp = getPostTimestamp();
         if (!timestamp) return;
 
-        // 这里的选择器几乎覆盖了雪球所有正文形态
-        const allLinks = document.querySelectorAll('a[href*="/S/"]:not([data-snapshot-done])');
+        const isDetail = isDetailPage();
+        const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+        const isOlderThanAMonth = (Date.now() - timestamp) > thirtyDaysMs;
 
-        allLinks.forEach(link => {
-            // 确保只在内容区域
+        document.querySelectorAll('a[href*="/S/"]:not([data-snapshot-done])').forEach(link => {
             const isContent = link.closest('.article__bd__detail, .article__content, .status-content, .post__body, article, .content');
             if (!isContent) return;
 
@@ -110,7 +115,11 @@
                                 const percent = ((currPrice - oldPrice) / oldPrice * 100).toFixed(2);
                                 const data = { name: info.name || fallbackName, symbol, oldP: oldPrice, currP: currPrice, percent };
 
-                                if (rawText.includes('$')) injectPercentBadge(link, percent);
+                                // --- 核心修改：仅在详情页、超过1个月、且文本带$时注入标签 ---
+                                if (isDetail && isOlderThanAMonth && rawText.includes('$')) {
+                                    injectPercentBadge(link, percent);
+                                }
+
                                 link.addEventListener('mouseenter', () => showTooltip(link, data));
                                 link.addEventListener('mouseleave', () => {
                                     const t = document.getElementById('xq-snapshot-tooltip');
@@ -126,9 +135,11 @@
     }
 
     function injectPercentBadge(linkEl, percent) {
+        if (linkEl.querySelector('.xq-badge')) return;
         const badge = document.createElement('span');
+        badge.className = 'xq-badge';
         const color = percent >= 0 ? '#ef5350' : '#26a69a';
-        badge.style = `display:inline-flex; align-items:center; justify-content:center; background:${percent >= 0 ? '#fff5f5' : '#f0f9f6'}; border:1px solid ${percent >= 0 ? '#ffcfcf' : '#c2e5d9'}; color:${color}; padding:0px 5px; border-radius:4px; font-size:11px; margin-left:5px; font-weight:bold; font-family:monospace; height:18px; line-height:1; vertical-align:middle;`;
+        badge.style = `display:inline-flex; align-items:center; background:${percent >= 0 ? '#fff5f5' : '#f0f9f6'}; border:1px solid ${percent >= 0 ? '#ffcfcf' : '#c2e5d9'}; color:${color}; padding:0px 5px; border-radius:4px; font-size:11px; margin-left:5px; font-weight:bold; height:18px; vertical-align:middle;`;
         badge.innerHTML = `${percent >= 0 ? '+' : ''}${percent}%`;
         linkEl.appendChild(badge);
     }
